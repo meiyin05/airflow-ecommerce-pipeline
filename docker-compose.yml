@@ -1,16 +1,16 @@
 version: '3.8'
 
-# 定义通用配置，避免重复编写环境变量
 x-airflow-common: &airflow-common
   image: apache/airflow:2.8.1
-  environment:
-    &airflow-common-env
+  environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    # 如果不设置这个，某些加密功能会报错，生产环境建议用生成的固定字符串
-    AIRFLOW__CORE__FERNET_KEY: ''
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
+    # 建议使用这个占位符，并在本地 .env 文件中设置 AIRFLOW_FERNET_KEY
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-fCr9f6-vW97P4fX6k8P1_XyZ1_LzR4_V5_L_X_X0L8=}
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__LOGGING_LEVEL: INFO
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
@@ -40,19 +40,18 @@ services:
     <<: *airflow-common
     container_name: airflow-init
     entrypoint: /bin/bash
-    # 初始化数据库、创建用户，并确保文件夹权限正确
     command:
       - -c
       - |
-        mkdir -p /opt/airflow/dags /opt/airflow/logs /opt/airflow/plugins
+        set -e
         airflow db migrate
         airflow users create \
-            --username admin \
-            --password admin \
-            --firstname admin \
-            --lastname admin \
-            --role Admin \
-            --email admin@example.com
+          --username admin \
+          --password admin \
+          --firstname admin \
+          --lastname admin \
+          --role Admin \
+          --email admin@example.com || true
 
   airflow-webserver:
     <<: *airflow-common
@@ -60,18 +59,28 @@ services:
     command: webserver
     ports:
       - "8080:8080"
+    restart: always
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
 
   airflow-scheduler:
     <<: *airflow-common
     container_name: airflow-scheduler
     command: scheduler
     restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
 
 volumes:
   postgres-db-volume:
